@@ -69,7 +69,7 @@ use serde::Deserialize;
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct RegisterResponse {
     // Skip deserialize because this field is not available in the response
@@ -156,8 +156,15 @@ fn build_function_arn(account_id: &str, region: &str, function_name: &str) -> St
     format!("arn:aws:lambda:{region}:{account_id}:function:{function_name}")
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build async runtime")
+        .block_on(inner_main())
+}
+
+pub(crate) async fn inner_main() -> Result<()> {
     let (aws_config, config) = load_configs();
 
     enable_logging_subsystem(&config);
@@ -202,10 +209,10 @@ fn load_configs() -> (AwsConfig, Arc<Config>) {
 fn enable_logging_subsystem(config: &Arc<Config>) {
     // Bridge any `log` logs into the tracing subsystem. Note this is a global
     // registration.
-    tracing_log::LogTracer::builder()
+    let _ = tracing_log::LogTracer::builder()
         .with_max_level(config.log_level.as_level_filter())
-        .init()
-        .expect("failed to set up log bridge");
+        .init();
+    // .expect("failed to set up log bridge");
 
     let subscriber = tracing_subscriber::fmt::Subscriber::builder()
         .with_env_filter(
@@ -221,7 +228,7 @@ fn enable_logging_subsystem(config: &Arc<Config>) {
         .without_time()
         .event_format(logger::Formatter)
         .finish();
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    let _ = tracing::subscriber::set_global_default(subscriber); // .expect("setting default subscriber failed");
 
     info!("logging subsystem enabled");
 }
@@ -475,10 +482,8 @@ fn setup_tag_provider(
 ) -> Arc<TagProvider> {
     let function_arn =
         build_function_arn(account_id, &aws_config.region, &aws_config.function_name);
-    let metadata_hash = hash_map::HashMap::from([(
-        lambda::tags::FUNCTION_ARN_KEY.to_string(),
-        function_arn.clone(),
-    )]);
+    let metadata_hash =
+        hash_map::HashMap::from([(lambda::tags::FUNCTION_ARN_KEY.to_string(), function_arn)]);
     Arc::new(TagProvider::new(
         Arc::clone(config),
         LAMBDA_RUNTIME_SLUG.to_string(),
